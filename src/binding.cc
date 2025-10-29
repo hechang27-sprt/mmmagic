@@ -1,12 +1,17 @@
 #include <node.h>
 #include <node_buffer.h>
+#include <uv.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 
 #ifdef _WIN32
 # include <io.h>
 # include <fcntl.h>
 # include <wchar.h>
+# include <windows.h>
+# include <share.h>
+# include <sys/stat.h>
 #endif
 
 #include "magic.h"
@@ -64,7 +69,7 @@ public:
 static v8::Persistent<Function> constructor;
 static const char* fallbackPath;
 
-class Magic : public ObjectWrap {
+class Magic : public node::ObjectWrap {
 public:
     v8::Persistent<Object> mgc_buffer;
     size_t mgc_buffer_len;
@@ -178,7 +183,7 @@ public:
     static void DetectFile(const v8::FunctionCallbackInfo<v8::Value>& args) {
       v8::Isolate* isolate = args.GetIsolate();
       v8::HandleScope scope(isolate);
-      Magic* obj = ObjectWrap::Unwrap<Magic>(args.This());
+      Magic* obj = node::ObjectWrap::Unwrap<Magic>(args.This());
 
       if (!args[0]->IsString()) {
         isolate->ThrowException(v8::Exception::TypeError(
@@ -215,7 +220,7 @@ public:
     static void Detect(const v8::FunctionCallbackInfo<v8::Value>& args) {
       v8::Isolate* isolate = args.GetIsolate();
       v8::HandleScope scope(isolate);
-      Magic* obj = ObjectWrap::Unwrap<Magic>(args.This());
+      Magic* obj = node::ObjectWrap::Unwrap<Magic>(args.This());
 
       if (args.Length() < 2) {
         isolate->ThrowException(v8::Exception::TypeError(
