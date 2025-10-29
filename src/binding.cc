@@ -35,6 +35,10 @@ public:
     free_error = true;
     error_message = nullptr;
     result = nullptr;
+
+    // Initialize async handle for main thread callback
+    uv_async_init(uv_default_loop(), &async_handle, AsyncCallback);
+    async_handle.data = this;
   }
 
   ~DetectRequest() {
@@ -47,7 +51,93 @@ public:
     free((void*)result);
   }
 
+  static void AsyncCallback(uv_async_t* handle) {
+    DetectRequest* detect_req = static_cast<DetectRequest*>(handle->data);
+
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    if (!isolate) {
+      uv_close((uv_handle_t*)&detect_req->async_handle, CloseCallback);
+      return;
+    }
+
+    v8::HandleScope scope(isolate);
+    v8::Local<v8::Context> context = isolate->GetCurrentContext();
+
+    Local<Function> callback = Local<Function>::New(isolate, detect_req->callback);
+
+    if (detect_req->error_message) {
+      Local<Value> err = v8::Exception::Error(
+        v8::String::NewFromUtf8(isolate, detect_req->error_message).ToLocalChecked()
+      );
+      Local<Value> argv[1] = { err };
+
+      v8::TryCatch try_catch(isolate);
+      auto result = callback->Call(context, context->Global(), 1, argv);
+      if (try_catch.HasCaught()) {
+        // Handle error if needed, but don't throw
+      }
+    } else {
+      Local<Value> argv[2];
+      int multi_result_flags =
+        (detect_req->flags & (MAGIC_CONTINUE | MAGIC_RAW));
+
+      argv[0] = v8::Null(isolate);
+
+      if (multi_result_flags == (MAGIC_CONTINUE | MAGIC_RAW)) {
+        Local<Array> results = v8::Array::New(isolate);
+        if (detect_req->result) {
+          uint32_t i = 0;
+          const char* result_end =
+            detect_req->result + strlen(detect_req->result);
+          const char* last_match = detect_req->result;
+          const char* cur_match;
+          while (true) {
+            if (!(cur_match = strstr(last_match, "\n- "))) {
+              // Append remainder string
+              if (last_match < result_end) {
+                Local<String> str = v8::String::NewFromUtf8(isolate, last_match).ToLocalChecked();
+                results->Set(context, i, str).FromJust();
+              }
+              break;
+            }
+
+            size_t match_len = (cur_match - last_match);
+            char* match = new char[match_len + 1];
+            strncpy(match, last_match, match_len);
+            match[match_len] = '\0';
+
+            Local<String> str = v8::String::NewFromUtf8(isolate, match).ToLocalChecked();
+            results->Set(context, i++, str).FromJust();
+
+            delete[] match;
+            last_match = cur_match + 3;
+          }
+        }
+        argv[1] = Local<Value>(results);
+      } else if (detect_req->result) {
+        argv[1] = v8::String::NewFromUtf8(isolate, detect_req->result).ToLocalChecked();
+      } else  {
+        argv[1] = v8::String::NewFromUtf8(isolate, "").ToLocalChecked();
+      }
+
+      v8::TryCatch try_catch(isolate);
+      auto result = callback->Call(context, context->Global(), 2, argv);
+      if (try_catch.HasCaught()) {
+        // Handle error if needed, but don't throw
+      }
+    }
+
+    // Close the async handle
+    uv_close((uv_handle_t*)&detect_req->async_handle, CloseCallback);
+  }
+
+  static void CloseCallback(uv_handle_t* handle) {
+    DetectRequest* detect_req = static_cast<DetectRequest*>(handle->data);
+    delete detect_req;
+  }
+
   uv_work_t request;
+  uv_async_t async_handle;
   v8::Persistent<Function> callback;
 
   char* data;
@@ -357,94 +447,9 @@ public:
     static void DetectAfter(uv_work_t* req) {
       DetectRequest* detect_req = static_cast<DetectRequest*>(req->data);
 
-      // Get the current isolate - this is crucial for V8 context
-      v8::Isolate* isolate = v8::Isolate::GetCurrent();
-      if (!isolate) {
-        delete detect_req;
-        return;
-      }
-
-      // Create HandleScope tied to the isolate
-      v8::HandleScope handle_scope(isolate);
-
-      // Get the current context from the isolate
-      v8::Local<v8::Context> context = isolate->GetCurrentContext();
-      if (context.IsEmpty()) {
-        delete detect_req;
-        return;
-      }
-
-      // Enter the context scope
-      v8::Context::Scope context_scope(context);
-
-      // Now safely create V8 handles
-      Local<Function> callback = Local<Function>::New(isolate, detect_req->callback);
-
-      if (detect_req->error_message) {
-        Local<Value> err = v8::Exception::Error(
-          v8::String::NewFromUtf8(isolate, detect_req->error_message).ToLocalChecked()
-        );
-        Local<Value> argv[1] = { err };
-
-        // Use direct V8 function call
-        v8::TryCatch try_catch(isolate);
-        auto result = callback->Call(context, context->Global(), 1, argv);
-        if (try_catch.HasCaught()) {
-          // Handle error if needed, but don't throw
-        }
-      } else {
-        Local<Value> argv[2];
-        int multi_result_flags =
-          (detect_req->flags & (MAGIC_CONTINUE | MAGIC_RAW));
-
-        argv[0] = v8::Null(isolate);
-
-        if (multi_result_flags == (MAGIC_CONTINUE | MAGIC_RAW)) {
-          Local<Array> results = v8::Array::New(isolate);
-          if (detect_req->result) {
-            uint32_t i = 0;
-            const char* result_end =
-              detect_req->result + strlen(detect_req->result);
-            const char* last_match = detect_req->result;
-            const char* cur_match;
-            while (true) {
-              if (!(cur_match = strstr(last_match, "\n- "))) {
-                // Append remainder string
-                if (last_match < result_end) {
-                  Local<String> str = v8::String::NewFromUtf8(isolate, last_match).ToLocalChecked();
-                  results->Set(context, i, str).FromJust();
-                }
-                break;
-              }
-
-              size_t match_len = (cur_match - last_match);
-              char* match = new char[match_len + 1];
-              strncpy(match, last_match, match_len);
-              match[match_len] = '\0';
-
-              Local<String> str = v8::String::NewFromUtf8(isolate, match).ToLocalChecked();
-              results->Set(context, i++, str).FromJust();
-
-              delete[] match;
-              last_match = cur_match + 3;
-            }
-          }
-          argv[1] = Local<Value>(results);
-        } else if (detect_req->result) {
-          argv[1] = v8::String::NewFromUtf8(isolate, detect_req->result).ToLocalChecked();
-        } else  {
-          argv[1] = v8::String::NewFromUtf8(isolate, "").ToLocalChecked();
-        }
-
-        // Use direct V8 function call
-        v8::TryCatch try_catch(isolate);
-        auto result = callback->Call(context, context->Global(), 2, argv);
-        if (try_catch.HasCaught()) {
-          // Handle error if needed, but don't throw
-        }
-      }
-
-      delete detect_req;
+      // Instead of calling the callback directly, trigger the async handle
+      // to schedule the callback execution on the main thread
+      uv_async_send(&detect_req->async_handle);
     }
 
     static void SetFallback(const v8::FunctionCallbackInfo<v8::Value>& args) {
