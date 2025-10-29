@@ -1,6 +1,5 @@
 #include <node.h>
 #include <node_buffer.h>
-#include <nan.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -23,7 +22,8 @@ public:
       source_len(source_len_),
       source_is_path(source_is_path_),
       flags(flags_) {
-    callback.Reset(callback_);
+    v8::Isolate* isolate = v8::Isolate::GetCurrent();
+    callback.Reset(isolate, callback_);
 
     request.data = this;
     free_error = true;
@@ -42,12 +42,12 @@ public:
   }
 
   uv_work_t request;
-  Nan::Persistent<Function> callback;
+  v8::Persistent<Function> callback;
 
   char* data;
   size_t data_len;
   bool data_is_path;
-  Nan::Persistent<Object> data_buffer;
+  v8::Persistent<Object> data_buffer;
 
   // libmagic info
   const char* magic_source;
@@ -61,12 +61,12 @@ public:
   const char* result;
 };
 
-static Nan::Persistent<Function> constructor;
+static v8::Persistent<Function> constructor;
 static const char* fallbackPath;
 
 class Magic : public ObjectWrap {
 public:
-    Nan::Persistent<Object> mgc_buffer;
+    v8::Persistent<Object> mgc_buffer;
     size_t mgc_buffer_len;
     const char* msource;
     int mflags;
@@ -89,7 +89,8 @@ public:
     }
 
     Magic(Local<Object> buffer, int flags) {
-      mgc_buffer.Reset(buffer);
+      v8::Isolate* isolate = v8::Isolate::GetCurrent();
+      mgc_buffer.Reset(isolate, buffer);
       mgc_buffer_len = Buffer::Length(buffer);
       msource = Buffer::Data(buffer);
 
@@ -109,8 +110,9 @@ public:
       msource = nullptr;
     }
 
-    static void New(const Nan::FunctionCallbackInfo<v8::Value>& args) {
-      Nan::HandleScope scope;
+    static void New(const v8::FunctionCallbackInfo<v8::Value>& args) {
+      v8::Isolate* isolate = args.GetIsolate();
+      v8::HandleScope scope(isolate);
 #ifndef _WIN32
       int magic_flags = MAGIC_SYMLINK;
 #else
@@ -118,33 +120,50 @@ public:
 #endif
       Magic* obj;
 
-      if (!args.IsConstructCall())
-        return Nan::ThrowTypeError("Use `new` to create instances of this object.");
+      if (!args.IsConstructCall()) {
+        isolate->ThrowException(v8::Exception::TypeError(
+          v8::String::NewFromUtf8(isolate, "Use `new` to create instances of this object.").ToLocalChecked()));
+        return;
+      }
 
       if (args.Length() > 1) {
-        if (args[1]->IsInt32())
-          magic_flags = Nan::To<int32_t>(args[1]).FromJust();
-        else
-          return Nan::ThrowTypeError("Second argument must be an integer");
+        if (args[1]->IsInt32()) {
+          auto maybe_int = args[1]->Int32Value(isolate->GetCurrentContext());
+          if (maybe_int.IsJust()) {
+            magic_flags = maybe_int.FromJust();
+          }
+        } else {
+          isolate->ThrowException(v8::Exception::TypeError(
+            v8::String::NewFromUtf8(isolate, "Second argument must be an integer").ToLocalChecked()));
+          return;
+        }
       }
 
       if (args.Length() > 0) {
         if (args[0]->IsString()) {
-          Nan::Utf8String str(args[0]);
-          char* path = strdup((const char*)(*str));
+          v8::String::Utf8Value str(isolate, args[0]);
+          char* path = strdup(*str);
           obj = new Magic(path, magic_flags);
         } else if (Buffer::HasInstance(args[0])) {
           obj = new Magic(args[0].As<Object>(), magic_flags);
         } else if (args[0]->IsInt32()) {
-          magic_flags = Nan::To<int32_t>(args[0]).FromJust();
+          auto maybe_int = args[0]->Int32Value(isolate->GetCurrentContext());
+          if (maybe_int.IsJust()) {
+            magic_flags = maybe_int.FromJust();
+          }
           obj = new Magic(nullptr, magic_flags);
-        } else if (args[0]->IsBoolean() && !Nan::To<bool>(args[0]).FromJust()) {
-          char* path = strdup(magic_getpath(nullptr, 0/*FILE_LOAD*/));
-          obj = new Magic(path, magic_flags);
+        } else if (args[0]->IsBoolean()) {
+          auto maybe_bool = args[0]->BooleanValue(isolate);
+          if (!maybe_bool) {
+            char* path = strdup(magic_getpath(nullptr, 0/*FILE_LOAD*/));
+            obj = new Magic(path, magic_flags);
+          } else {
+            obj = new Magic(nullptr, magic_flags);
+          }
         } else {
-          return Nan::ThrowTypeError(
-            "First argument must be a string, Buffer, or integer"
-          );
+          isolate->ThrowException(v8::Exception::TypeError(
+            v8::String::NewFromUtf8(isolate, "First argument must be a string, Buffer, or integer").ToLocalChecked()));
+          return;
         }
       } else {
         obj = new Magic(nullptr, magic_flags);
@@ -153,28 +172,35 @@ public:
       obj->Wrap(args.This());
       obj->Ref();
 
-      return args.GetReturnValue().Set(args.This());
+      args.GetReturnValue().Set(args.This());
     }
 
-    static void DetectFile(const Nan::FunctionCallbackInfo<v8::Value>& args) {
-      Nan::HandleScope scope;
+    static void DetectFile(const v8::FunctionCallbackInfo<v8::Value>& args) {
+      v8::Isolate* isolate = args.GetIsolate();
+      v8::HandleScope scope(isolate);
       Magic* obj = ObjectWrap::Unwrap<Magic>(args.This());
 
-      if (!args[0]->IsString())
-        return Nan::ThrowTypeError("First argument must be a string");
-      if (!args[1]->IsFunction())
-        return Nan::ThrowTypeError("Second argument must be a callback function");
+      if (!args[0]->IsString()) {
+        isolate->ThrowException(v8::Exception::TypeError(
+          v8::String::NewFromUtf8(isolate, "First argument must be a string").ToLocalChecked()));
+        return;
+      }
+      if (!args[1]->IsFunction()) {
+        isolate->ThrowException(v8::Exception::TypeError(
+          v8::String::NewFromUtf8(isolate, "Second argument must be a callback function").ToLocalChecked()));
+        return;
+      }
 
       Local<Function> callback = Local<Function>::Cast(args[1]);
 
-      Nan::Utf8String str(args[0]);
+      v8::String::Utf8Value str(isolate, args[0]);
 
       DetectRequest* detect_req = new DetectRequest(callback,
                                                     obj->msource,
                                                     obj->mgc_buffer_len,
                                                     obj->mgc_buffer.IsEmpty(),
                                                     obj->mflags);
-      detect_req->data = strdup((const char*)*str);
+      detect_req->data = strdup(*str);
       detect_req->data_is_path = true;
 
       int status = uv_queue_work(uv_default_loop(),
@@ -183,19 +209,29 @@ public:
                                  (uv_after_work_cb)Magic::DetectAfter);
       assert(status == 0);
 
-      args.GetReturnValue().Set(Nan::Undefined());
+      args.GetReturnValue().Set(v8::Undefined(isolate));
     }
 
-    static void Detect(const Nan::FunctionCallbackInfo<v8::Value>& args) {
-      Nan::HandleScope scope;
+    static void Detect(const v8::FunctionCallbackInfo<v8::Value>& args) {
+      v8::Isolate* isolate = args.GetIsolate();
+      v8::HandleScope scope(isolate);
       Magic* obj = ObjectWrap::Unwrap<Magic>(args.This());
 
-      if (args.Length() < 2)
-        return Nan::ThrowTypeError("Expecting 2 arguments");
-      if (!Buffer::HasInstance(args[0]))
-        return Nan::ThrowTypeError("First argument must be a Buffer");
-      if (!args[1]->IsFunction())
-        return Nan::ThrowTypeError("Second argument must be a callback function");
+      if (args.Length() < 2) {
+        isolate->ThrowException(v8::Exception::TypeError(
+          v8::String::NewFromUtf8(isolate, "Expecting 2 arguments").ToLocalChecked()));
+        return;
+      }
+      if (!Buffer::HasInstance(args[0])) {
+        isolate->ThrowException(v8::Exception::TypeError(
+          v8::String::NewFromUtf8(isolate, "First argument must be a Buffer").ToLocalChecked()));
+        return;
+      }
+      if (!args[1]->IsFunction()) {
+        isolate->ThrowException(v8::Exception::TypeError(
+          v8::String::NewFromUtf8(isolate, "Second argument must be a callback function").ToLocalChecked()));
+        return;
+      }
 
       Local<Function> callback = Local<Function>::Cast(args[1]);
       Local<Object> buffer_obj = args[0].As<Object>();
@@ -207,7 +243,7 @@ public:
                                                     obj->mflags);
       detect_req->data = Buffer::Data(buffer_obj);
       detect_req->data_len = Buffer::Length(buffer_obj);
-      detect_req->data_buffer.Reset(buffer_obj);
+      detect_req->data_buffer.Reset(isolate, buffer_obj);
       detect_req->data_is_path = false;
 
       int status = uv_queue_work(uv_default_loop(),
@@ -216,7 +252,7 @@ public:
                                  (uv_after_work_cb)Magic::DetectAfter);
       assert(status == 0);
 
-      return args.GetReturnValue().Set(args.This());
+      args.GetReturnValue().Set(args.This());
     }
 
     static void DetectWork(uv_work_t* req) {
@@ -230,14 +266,17 @@ public:
 #if NODE_MODULE_VERSION <= 0x000B
         detect_req->error_message =
           strdup(uv_strerror(uv_last_error(uv_default_loop())));
+        detect_req->free_error = true;
 #else
 // XXX libuv 1.x currently has no public cross-platform function to convert an
 //     OS-specific error number to a libuv error number. `-errno` should work
 //     for *nix, but just passing GetLastError() on Windows will not work ...
 # ifdef _MSC_VER
         detect_req->error_message = strdup(uv_strerror(GetLastError()));
+        detect_req->free_error = true;
 # else
         detect_req->error_message = strdup(uv_strerror(-errno));
+        detect_req->free_error = true;
 # endif
 #endif
       } else if (detect_req->source_is_path) {
@@ -279,13 +318,9 @@ public:
           }
         }
         if (fd == -1) {
-          detect_req->free_error = false;
+          detect_req->free_error = true;
           char const * msg = "Error while opening file";
-          char * msg_buf = (char *) malloc(strlen(msg) + 1);
-          if (msg_buf != nullptr) {
-            strcpy(msg_buf, msg);
-          }
-          detect_req->error_message = msg_buf;
+          detect_req->error_message = strdup(msg);
           magic_close(magic);
           return;
         }
@@ -302,8 +337,10 @@ public:
 
       if (result == nullptr) {
         const char* error = magic_error(magic);
-        if (error)
+        if (error) {
           detect_req->error_message = strdup(error);
+          detect_req->free_error = true;
+        }
       } else {
         detect_req->result = strdup(result);
       }
@@ -335,13 +372,15 @@ public:
       v8::Context::Scope context_scope(context);
 
       // Now safely create V8 handles
-      Local<Function> callback = Nan::New(detect_req->callback);
+      Local<Function> callback = Local<Function>::New(isolate, detect_req->callback);
 
       if (detect_req->error_message) {
-        Local<Value> err = Nan::Error(detect_req->error_message);
+        Local<Value> err = v8::Exception::Error(
+          v8::String::NewFromUtf8(isolate, detect_req->error_message).ToLocalChecked()
+        );
         Local<Value> argv[1] = { err };
 
-        // Use node::MakeCallback directly with proper context
+        // Use direct V8 function call
         v8::TryCatch try_catch(isolate);
         auto result = callback->Call(context, context->Global(), 1, argv);
         if (try_catch.HasCaught()) {
@@ -352,10 +391,10 @@ public:
         int multi_result_flags =
           (detect_req->flags & (MAGIC_CONTINUE | MAGIC_RAW));
 
-        argv[0] = Nan::Null();
+        argv[0] = v8::Null(isolate);
 
         if (multi_result_flags == (MAGIC_CONTINUE | MAGIC_RAW)) {
-          Local<Array> results = Nan::New<Array>();
+          Local<Array> results = v8::Array::New(isolate);
           if (detect_req->result) {
             uint32_t i = 0;
             const char* result_end =
@@ -366,9 +405,8 @@ public:
               if (!(cur_match = strstr(last_match, "\n- "))) {
                 // Append remainder string
                 if (last_match < result_end) {
-                  Nan::Set(Local<Object>::Cast(results),
-                           i,
-                           Nan::New<String>(last_match).ToLocalChecked());
+                  Local<String> str = v8::String::NewFromUtf8(isolate, last_match).ToLocalChecked();
+                  results->Set(context, i, str).FromJust();
                 }
                 break;
               }
@@ -378,9 +416,8 @@ public:
               strncpy(match, last_match, match_len);
               match[match_len] = '\0';
 
-              Nan::Set(Local<Object>::Cast(results),
-                       i++,
-                       Nan::New<String>(match).ToLocalChecked());
+              Local<String> str = v8::String::NewFromUtf8(isolate, match).ToLocalChecked();
+              results->Set(context, i++, str).FromJust();
 
               delete[] match;
               last_match = cur_match + 3;
@@ -388,13 +425,12 @@ public:
           }
           argv[1] = Local<Value>(results);
         } else if (detect_req->result) {
-          argv[1] =
-            Local<Value>(Nan::New<String>(detect_req->result).ToLocalChecked());
+          argv[1] = v8::String::NewFromUtf8(isolate, detect_req->result).ToLocalChecked();
         } else  {
-          argv[1] = Local<Value>(Nan::New<String>().ToLocalChecked());
+          argv[1] = v8::String::NewFromUtf8(isolate, "").ToLocalChecked();
         }
 
-        // Use node::MakeCallback directly with proper context
+        // Use direct V8 function call
         v8::TryCatch try_catch(isolate);
         auto result = callback->Call(context, context->Global(), 2, argv);
         if (try_catch.HasCaught()) {
@@ -405,45 +441,59 @@ public:
       delete detect_req;
     }
 
-    static void SetFallback(const Nan::FunctionCallbackInfo<v8::Value>& args) {
+    static void SetFallback(const v8::FunctionCallbackInfo<v8::Value>& args) {
+      v8::Isolate* isolate = args.GetIsolate();
+
       if (fallbackPath)
         free((void*)fallbackPath);
 
       fallbackPath = nullptr;
       if (args.Length() > 0 && args[0]->IsString()) {
-        Nan::Utf8String str(args[0]);
+        v8::String::Utf8Value str(isolate, args[0]);
         if (str.length() > 0)
-          fallbackPath = strdup((const char*)(*str));
+          fallbackPath = strdup(*str);
       }
 
-      return args.GetReturnValue().Set(args.This());
+      args.GetReturnValue().Set(args.This());
     }
 
     static void Initialize(Local<Object> target) {
+      v8::Isolate* isolate = v8::Isolate::GetCurrent();
+      v8::HandleScope scope(isolate);
+      v8::Local<v8::Context> context = isolate->GetCurrentContext();
 
-      Local<FunctionTemplate> tpl = Nan::New<FunctionTemplate>(New);
+      Local<FunctionTemplate> tpl = v8::FunctionTemplate::New(isolate, New);
 
       tpl->InstanceTemplate()->SetInternalFieldCount(1);
-      tpl->SetClassName(Nan::New<String>("Magic").ToLocalChecked());
-      Nan::SetPrototypeMethod(tpl, "detectFile", DetectFile);
-      Nan::SetPrototypeMethod(tpl, "detect", Detect);
+      tpl->SetClassName(v8::String::NewFromUtf8(isolate, "Magic").ToLocalChecked());
 
-      constructor.Reset(Nan::GetFunction(tpl).ToLocalChecked());
-      Nan::Set(target,
-               Nan::New<String>("setFallback").ToLocalChecked(),
-               Nan::GetFunction(
-                 Nan::New<FunctionTemplate>(SetFallback)
-               ).ToLocalChecked()).FromJust();
+      // Set prototype methods
+      tpl->PrototypeTemplate()->Set(
+        v8::String::NewFromUtf8(isolate, "detectFile").ToLocalChecked(),
+        v8::FunctionTemplate::New(isolate, DetectFile)
+      );
+      tpl->PrototypeTemplate()->Set(
+        v8::String::NewFromUtf8(isolate, "detect").ToLocalChecked(),
+        v8::FunctionTemplate::New(isolate, Detect)
+      );
 
-      Nan::Set(target,
-               Nan::New<String>("Magic").ToLocalChecked(),
-               Nan::GetFunction(tpl).ToLocalChecked()).FromJust();
+      Local<Function> function = tpl->GetFunction(context).ToLocalChecked();
+      constructor.Reset(isolate, function);
+
+      target->Set(context,
+                  v8::String::NewFromUtf8(isolate, "setFallback").ToLocalChecked(),
+                  v8::FunctionTemplate::New(isolate, SetFallback)->GetFunction(context).ToLocalChecked()).FromJust();
+
+      target->Set(context,
+                  v8::String::NewFromUtf8(isolate, "Magic").ToLocalChecked(),
+                  function).FromJust();
     }
 };
 
 extern "C" {
   static void init(Local<Object> target, Local<Value> unused, Local<Context> context, void* priv) {
-    Nan::HandleScope scope;
+    v8::Isolate* isolate = context->GetIsolate();
+    v8::HandleScope scope(isolate);
     Magic::Initialize(target);
   }
 
