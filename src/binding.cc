@@ -312,14 +312,41 @@ public:
     }
 
     static void DetectAfter(uv_work_t* req) {
-      Nan::HandleScope scope;
       DetectRequest* detect_req = static_cast<DetectRequest*>(req->data);
+
+      // Get the current isolate - this is crucial for V8 context
+      v8::Isolate* isolate = v8::Isolate::GetCurrent();
+      if (!isolate) {
+        delete detect_req;
+        return;
+      }
+
+      // Create HandleScope tied to the isolate
+      v8::HandleScope handle_scope(isolate);
+
+      // Get the current context from the isolate
+      v8::Local<v8::Context> context = isolate->GetCurrentContext();
+      if (context.IsEmpty()) {
+        delete detect_req;
+        return;
+      }
+
+      // Enter the context scope
+      v8::Context::Scope context_scope(context);
+
+      // Now safely create V8 handles
       Local<Function> callback = Nan::New(detect_req->callback);
 
       if (detect_req->error_message) {
         Local<Value> err = Nan::Error(detect_req->error_message);
         Local<Value> argv[1] = { err };
-        Nan::MakeCallback(Nan::GetCurrentContext()->Global(), callback, 1, argv);
+
+        // Use node::MakeCallback directly with proper context
+        v8::TryCatch try_catch(isolate);
+        auto result = callback->Call(context, context->Global(), 1, argv);
+        if (try_catch.HasCaught()) {
+          // Handle error if needed, but don't throw
+        }
       } else {
         Local<Value> argv[2];
         int multi_result_flags =
@@ -367,7 +394,12 @@ public:
           argv[1] = Local<Value>(Nan::New<String>().ToLocalChecked());
         }
 
-        Nan::MakeCallback(Nan::GetCurrentContext()->Global(), callback, 2, argv);
+        // Use node::MakeCallback directly with proper context
+        v8::TryCatch try_catch(isolate);
+        auto result = callback->Call(context, context->Global(), 2, argv);
+        if (try_catch.HasCaught()) {
+          // Handle error if needed, but don't throw
+        }
       }
 
       delete detect_req;
