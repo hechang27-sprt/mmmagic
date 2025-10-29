@@ -15,12 +15,11 @@
 using namespace node;
 using namespace v8;
 
-class DetectRequest : public Nan::AsyncResource {
+class DetectRequest {
 public:
   DetectRequest(Local<Function> callback_, const char* magic_source_,
                 size_t source_len_, bool source_is_path_, int flags_)
-    : Nan::AsyncResource("mmmagic:DetectRequest"),
-      magic_source(magic_source_),
+    : magic_source(magic_source_),
       source_len(source_len_),
       source_is_path(source_is_path_),
       flags(flags_) {
@@ -313,27 +312,8 @@ public:
     }
 
     static void DetectAfter(uv_work_t* req) {
+      Nan::HandleScope scope;
       DetectRequest* detect_req = static_cast<DetectRequest*>(req->data);
-
-      // Ensure we have a valid isolate
-      v8::Isolate* isolate = v8::Isolate::GetCurrent();
-      if (!isolate) {
-        delete detect_req;
-        return;
-      }
-
-      // Create a handle scope in the current isolate
-      v8::HandleScope handle_scope(isolate);
-
-      // Enter the context if available
-      v8::Local<v8::Context> context = isolate->GetCurrentContext();
-      if (context.IsEmpty()) {
-        delete detect_req;
-        return;
-      }
-      v8::Context::Scope context_scope(context);
-
-      // Get the callback from the persistent handle
       Local<Function> callback = Nan::New(detect_req->callback);
 
       if (detect_req->error_message) {
