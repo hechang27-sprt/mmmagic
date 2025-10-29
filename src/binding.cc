@@ -313,8 +313,18 @@ public:
     }
 
     static void DetectAfter(uv_work_t* req) {
-      Nan::HandleScope scope;
       DetectRequest* detect_req = static_cast<DetectRequest*>(req->data);
+
+      // Use the async resource's isolate and enter its context
+      v8::Isolate* isolate = v8::Isolate::GetCurrent();
+      if (!isolate) {
+        delete detect_req;
+        return;
+      }
+
+      Nan::HandleScope scope;
+
+      // Get the callback from the persistent handle
       Local<Function> callback = Nan::New(detect_req->callback);
       Local<Object> target = Nan::New<Object>();
 
@@ -412,10 +422,10 @@ public:
 };
 
 extern "C" {
-  void init(Local<Object> target) {
+  static void init(Local<Object> target, Local<Value> unused, Local<Context> context, void* priv) {
     Nan::HandleScope scope;
     Magic::Initialize(target);
   }
 
-  NODE_MODULE(magic, init);
+  NODE_MODULE_CONTEXT_AWARE(magic, init);
 }
