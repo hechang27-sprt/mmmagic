@@ -315,23 +315,31 @@ public:
     static void DetectAfter(uv_work_t* req) {
       DetectRequest* detect_req = static_cast<DetectRequest*>(req->data);
 
-      // Use the async resource's isolate and enter its context
+      // Ensure we have a valid isolate
       v8::Isolate* isolate = v8::Isolate::GetCurrent();
       if (!isolate) {
         delete detect_req;
         return;
       }
 
-      Nan::HandleScope scope;
+      // Create a handle scope in the current isolate
+      v8::HandleScope handle_scope(isolate);
+
+      // Enter the context if available
+      v8::Local<v8::Context> context = isolate->GetCurrentContext();
+      if (context.IsEmpty()) {
+        delete detect_req;
+        return;
+      }
+      v8::Context::Scope context_scope(context);
 
       // Get the callback from the persistent handle
       Local<Function> callback = Nan::New(detect_req->callback);
-      Local<Object> target = Nan::New<Object>();
 
       if (detect_req->error_message) {
         Local<Value> err = Nan::Error(detect_req->error_message);
         Local<Value> argv[1] = { err };
-        detect_req->runInAsyncScope(target, callback, 1, argv);
+        Nan::MakeCallback(Nan::GetCurrentContext()->Global(), callback, 1, argv);
       } else {
         Local<Value> argv[2];
         int multi_result_flags =
@@ -379,7 +387,7 @@ public:
           argv[1] = Local<Value>(Nan::New<String>().ToLocalChecked());
         }
 
-        detect_req->runInAsyncScope(target, callback, 2, argv);
+        Nan::MakeCallback(Nan::GetCurrentContext()->Global(), callback, 2, argv);
       }
 
       delete detect_req;
