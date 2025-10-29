@@ -1,6 +1,8 @@
 #include <node.h>
 #include <node_buffer.h>
 #include <node_object_wrap.h>
+#include <env.h>
+#include <env-inl.h>
 #include <uv.h>
 #include <string.h>
 #include <stdlib.h>
@@ -54,14 +56,17 @@ public:
   static void AsyncCallback(uv_async_t* handle) {
     DetectRequest* detect_req = static_cast<DetectRequest*>(handle->data);
 
-    v8::Isolate* isolate = v8::Isolate::GetCurrent();
-    if (!isolate) {
+    // Use node::Environment to get the proper execution context
+    node::Environment* env = node::Environment::GetCurrent(v8::Isolate::GetCurrent());
+    if (!env) {
       uv_close((uv_handle_t*)&detect_req->async_handle, CloseCallback);
       return;
     }
 
+    v8::Isolate* isolate = env->isolate();
     v8::HandleScope scope(isolate);
-    v8::Local<v8::Context> context = isolate->GetCurrentContext();
+    v8::Local<v8::Context> context = env->context();
+    v8::Context::Scope context_scope(context);
 
     Local<Function> callback = Local<Function>::New(isolate, detect_req->callback);
 
@@ -71,11 +76,8 @@ public:
       );
       Local<Value> argv[1] = { err };
 
-      v8::TryCatch try_catch(isolate);
-      auto result = callback->Call(context, context->Global(), 1, argv);
-      if (try_catch.HasCaught()) {
-        // Handle error if needed, but don't throw
-      }
+      // Use node::MakeCallback for proper environment
+      node::MakeCallback(isolate, context->Global(), callback, 1, argv, {0, 0});
     } else {
       Local<Value> argv[2];
       int multi_result_flags =
@@ -120,11 +122,8 @@ public:
         argv[1] = v8::String::NewFromUtf8(isolate, "").ToLocalChecked();
       }
 
-      v8::TryCatch try_catch(isolate);
-      auto result = callback->Call(context, context->Global(), 2, argv);
-      if (try_catch.HasCaught()) {
-        // Handle error if needed, but don't throw
-      }
+      // Use node::MakeCallback for proper environment
+      node::MakeCallback(isolate, context->Global(), callback, 2, argv, {0, 0});
     }
 
     // Close the async handle
