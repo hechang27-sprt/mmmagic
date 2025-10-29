@@ -57,7 +57,7 @@ public:
   int flags;
 
   bool free_error;
-  char* error_message;
+  const char* error_message;
 
   const char* result;
 };
