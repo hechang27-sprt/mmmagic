@@ -111,7 +111,7 @@ public:
     }
 
     static void New(const Nan::FunctionCallbackInfo<v8::Value>& args) {
-      Nan::HandleScope();
+      Nan::HandleScope scope;
 #ifndef _WIN32
       int magic_flags = MAGIC_SYMLINK;
 #else
@@ -158,7 +158,7 @@ public:
     }
 
     static void DetectFile(const Nan::FunctionCallbackInfo<v8::Value>& args) {
-      Nan::HandleScope();
+      Nan::HandleScope scope;
       Magic* obj = ObjectWrap::Unwrap<Magic>(args.This());
 
       if (!args[0]->IsString())
@@ -188,7 +188,7 @@ public:
     }
 
     static void Detect(const Nan::FunctionCallbackInfo<v8::Value>& args) {
-      Nan::HandleScope();
+      Nan::HandleScope scope;
       Magic* obj = ObjectWrap::Unwrap<Magic>(args.This());
 
       if (args.Length() < 2)
@@ -413,7 +413,7 @@ public:
 
 extern "C" {
   void init(Local<Object> target) {
-    Nan::HandleScope();
+    Nan::HandleScope scope;
     Magic::Initialize(target);
   }
 
