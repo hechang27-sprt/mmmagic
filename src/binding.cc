@@ -1,5 +1,6 @@
 #include <node.h>
 #include <node_buffer.h>
+#include <node_object_wrap.h>
 #include <uv.h>
 #include <string.h>
 #include <stdlib.h>
@@ -69,7 +70,7 @@ public:
 static v8::Persistent<Function> constructor;
 static const char* fallbackPath;
 
-class Magic : public node::ObjectWrap {
+class Magic : public ObjectWrap {
 public:
     v8::Persistent<Object> mgc_buffer;
     size_t mgc_buffer_len;
@@ -183,7 +184,7 @@ public:
     static void DetectFile(const v8::FunctionCallbackInfo<v8::Value>& args) {
       v8::Isolate* isolate = args.GetIsolate();
       v8::HandleScope scope(isolate);
-      Magic* obj = node::ObjectWrap::Unwrap<Magic>(args.This());
+      Magic* obj = ObjectWrap::Unwrap<Magic>(args.This());
 
       if (!args[0]->IsString()) {
         isolate->ThrowException(v8::Exception::TypeError(
@@ -220,7 +221,7 @@ public:
     static void Detect(const v8::FunctionCallbackInfo<v8::Value>& args) {
       v8::Isolate* isolate = args.GetIsolate();
       v8::HandleScope scope(isolate);
-      Magic* obj = node::ObjectWrap::Unwrap<Magic>(args.This());
+      Magic* obj = ObjectWrap::Unwrap<Magic>(args.This());
 
       if (args.Length() < 2) {
         isolate->ThrowException(v8::Exception::TypeError(
