@@ -65,7 +65,7 @@ public:
 static Nan::Persistent<Function> constructor;
 static const char* fallbackPath;
 
-class Magic : public ObjectWrap {
+class Magic : public Nan::ObjectWrap {
 public:
     Nan::Persistent<Object> mgc_buffer;
     size_t mgc_buffer_len;
@@ -91,8 +91,8 @@ public:
 
     Magic(Local<Object> buffer, int flags) {
       mgc_buffer.Reset(buffer);
-      mgc_buffer_len = Buffer::Length(buffer);
-      msource = Buffer::Data(buffer);
+      mgc_buffer_len = Nan::To<uint32_t>(Nan::Get(buffer, Nan::New("length").ToLocalChecked()).ToLocalChecked()).FromJust();
+      msource = node::Buffer::Data(buffer);
 
       // When returning multiple matches, MAGIC_RAW needs to be set so that we
       // can more easily parse the output into an array for the end user
@@ -134,7 +134,7 @@ public:
           Nan::Utf8String str(args[0]);
           char* path = strdup((const char*)(*str));
           obj = new Magic(path, magic_flags);
-        } else if (Buffer::HasInstance(args[0])) {
+        } else if (node::Buffer::HasInstance(args[0])) {
           obj = new Magic(args[0].As<Object>(), magic_flags);
         } else if (args[0]->IsInt32()) {
           magic_flags = Nan::To<int32_t>(args[0]).FromJust();
@@ -154,12 +154,12 @@ public:
       obj->Wrap(args.This());
       obj->Ref();
 
-      return args.GetReturnValue().Set(args.This());
+      args.GetReturnValue().Set(args.This());
     }
 
     static void DetectFile(const Nan::FunctionCallbackInfo<v8::Value>& args) {
       Nan::HandleScope scope;
-      Magic* obj = ObjectWrap::Unwrap<Magic>(args.This());
+      Magic* obj = Nan::ObjectWrap::Unwrap<Magic>(args.This());
 
       if (!args[0]->IsString())
         return Nan::ThrowTypeError("First argument must be a string");
@@ -189,11 +189,11 @@ public:
 
     static void Detect(const Nan::FunctionCallbackInfo<v8::Value>& args) {
       Nan::HandleScope scope;
-      Magic* obj = ObjectWrap::Unwrap<Magic>(args.This());
+      Magic* obj = Nan::ObjectWrap::Unwrap<Magic>(args.This());
 
       if (args.Length() < 2)
         return Nan::ThrowTypeError("Expecting 2 arguments");
-      if (!Buffer::HasInstance(args[0]))
+      if (!node::Buffer::HasInstance(args[0]))
         return Nan::ThrowTypeError("First argument must be a Buffer");
       if (!args[1]->IsFunction())
         return Nan::ThrowTypeError("Second argument must be a callback function");
@@ -206,8 +206,8 @@ public:
                                                     obj->mgc_buffer_len,
                                                     obj->mgc_buffer.IsEmpty(),
                                                     obj->mflags);
-      detect_req->data = Buffer::Data(buffer_obj);
-      detect_req->data_len = Buffer::Length(buffer_obj);
+      detect_req->data = node::Buffer::Data(buffer_obj);
+      detect_req->data_len = node::Buffer::Length(buffer_obj);
       detect_req->data_buffer.Reset(buffer_obj);
       detect_req->data_is_path = false;
 
@@ -217,7 +217,7 @@ public:
                                  (uv_after_work_cb)Magic::DetectAfter);
       assert(status == 0);
 
-      return args.GetReturnValue().Set(args.This());
+      args.GetReturnValue().Set(args.This());
     }
 
     static void DetectWork(uv_work_t* req) {
@@ -316,12 +316,11 @@ public:
       Nan::HandleScope scope;
       DetectRequest* detect_req = static_cast<DetectRequest*>(req->data);
       Local<Function> callback = Nan::New(detect_req->callback);
-      Local<Object> target = Nan::New<Object>();
 
       if (detect_req->error_message) {
         Local<Value> err = Nan::Error(detect_req->error_message);
         Local<Value> argv[1] = { err };
-        detect_req->runInAsyncScope(target, callback, 1, argv);
+        detect_req->runInAsyncScope(Nan::GetCurrentContext()->Global(), callback, 1, argv);
       } else {
         Local<Value> argv[2];
         int multi_result_flags =
@@ -369,7 +368,7 @@ public:
           argv[1] = Local<Value>(Nan::New<String>().ToLocalChecked());
         }
 
-        detect_req->runInAsyncScope(target, callback, 2, argv);
+        detect_req->runInAsyncScope(Nan::GetCurrentContext()->Global(), callback, 2, argv);
       }
 
       delete detect_req;
@@ -386,11 +385,10 @@ public:
           fallbackPath = strdup((const char*)(*str));
       }
 
-      return args.GetReturnValue().Set(args.This());
+      args.GetReturnValue().Set(args.This());
     }
 
     static void Initialize(Local<Object> target) {
-
       Local<FunctionTemplate> tpl = Nan::New<FunctionTemplate>(New);
 
       tpl->InstanceTemplate()->SetInternalFieldCount(1);
@@ -417,5 +415,5 @@ extern "C" {
     Magic::Initialize(target);
   }
 
-  NODE_MODULE(magic, init);
+  NODE_MODULE(magic, init)
 }
