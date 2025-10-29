@@ -57,7 +57,7 @@ public:
   int flags;
 
   bool free_error;
-  const char* error_message;
+  char* error_message;
 
   const char* result;
 };
@@ -281,7 +281,12 @@ public:
         }
         if (fd == -1) {
           detect_req->free_error = false;
-          detect_req->error_message = "Error while opening file";
+          char const * msg = "Error while opening file";
+          char * msg_buf = (char *) malloc(strlen(msg) + 1);
+          if (msg_buf != nullptr) {
+            strcpy(msg_buf, msg);
+          }
+          detect_req->error_message = msg_buf;
           magic_close(magic);
           return;
         }
